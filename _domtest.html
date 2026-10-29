@@ -1,0 +1,596 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <title>MODBAY DOM 交互测试</title>
+  <style>body{font:13px/1.55 monospace;background:#111;color:#eee;padding:16px}pre{white-space:pre-wrap}.ok{color:#5ee089}.bad{color:#ff6259}.hd{color:#74aaff}</style>
+</head>
+<body>
+  <pre id="out">running…</pre>
+  <iframe id="fr" src="index.html#/build" style="width:1280px;height:820px;border:1px solid #333"></iframe>
+  <script>
+    var results = [];
+    function log(name, pass, detail) { results.push({ name: name, pass: pass, detail: detail || "" }); }
+    function sleep(ms) { return new Promise(function (r) { setTimeout(r, ms); }); }
+    function dump() {
+      var o = document.getElementById("out");
+      var failList = results.filter(function (r) { return !r.pass; });
+      var fails = failList.length;
+      var NL = String.fromCharCode(10);
+      var head = fails ? '<div style="color:#f66;font-weight:700">失败 ' + fails + ' 条：' +
+        failList.map(function (r) { return r.name + " → " + r.detail; }).join(" ｜ ") + "</div>" + NL : "";
+      o.innerHTML = head + results.map(function (r) {
+        return '<span class="' + (r.pass ? "ok" : "bad") + '">' + (r.pass ? "  ok  " : "  FAIL ") + r.name + (r.detail ? "  -> " + r.detail : "") + "</span>";
+      }).join("\n") + "\n\n=== " + (results.length - fails) + " passed, " + fails + " failed ===";
+      /* 结果回传给本地服务器日志（服务端 404 无所谓，要的是请求行里的文本） */
+      try {
+        var payload = JSON.stringify({
+          summary: (results.length - fails) + " passed, " + fails + " failed",
+          fails: failList.map(function (r) { return r.name + " -> " + r.detail; })
+        });
+        new Image().src = "/api/test-log?d=" + encodeURIComponent(payload);
+      } catch (e) { /* noop */ }
+    }
+
+    var fr = document.getElementById("fr");
+    var CANDIDATES = [];
+    (function () {
+      var p = new URLSearchParams(location.search).get("src");
+      if (p) CANDIDATES.push(p);
+      CANDIDATES.push("index.html", "./index.html", "../index.html", "/index.html");
+    })();
+    var results0 = [];
+    function failBoot(msg) {
+      document.getElementById("out").innerHTML =
+        '<span class="bad">  FAIL harness 启动 -> ' + msg + "</span>\n\n" +
+        '<span class="hd">这个测试页需要和 index.html 同目录、通过 HTTP 打开（iframe 要加载真实站点）。</span>\n' +
+        "修复方法：\n" +
+        "  1. cd &lt;项目目录&gt;\n" +
+        "  2. python -m http.server 8321\n" +
+        "  3. 浏览器打开 http://127.0.0.1:8321/_domtest.html\n" +
+        "已尝试的路径: " + CANDIDATES.join(" , ");
+    }
+    function tryCandidate(i) {
+      if (i >= CANDIDATES.length) { failBoot("iframe 未就绪（所有候选路径都加载失败）"); return; }
+      fr.src = CANDIDATES[i] + "#/build";
+      var tries = 0;
+      var iv = setInterval(function () {
+        tries++;
+        var D = fr.contentDocument, W = fr.contentWindow;
+        var ready = D && D.readyState === "complete" && W.M && W.MODBAY_UI && W.MODBAY_LIB_LIST && D.getElementById("lib-mini-list");
+        if (ready) { clearInterval(iv); run(W).catch(function (e) { log("harness", false, e && e.message); dump(); }); }
+        else if (tries > 60) { clearInterval(iv); tryCandidate(i + 1); }
+      }, 80);
+    }
+    tryCandidate(0);
+
+    async function run(W) {
+      var D = W.document, M = W.M;
+      var i = 0;
+      async function step(name, fn) {
+        i++;
+        try { await fn(); }
+        catch (e) { log(name, false, "异常 " + (e && e.message)); }
+      }
+      function is(c, detail) { log(currentName, !!c, detail); }
+      var currentName = "";
+      async function T(name, fn) { currentName = name; await step(name, async function () { await fn(function (c, d) { log(name, !!c, d); }); }); }
+
+      /* 1. 初始状态 */
+      await T("01 初始清空并渲染配置台", async function (ck) {
+        M.clearAll(); W.location.hash = "#/build"; await sleep(250);
+        ck(M.totalCount() === 0 && M.state.board === null, "count=" + M.totalCount());
+      });
+
+      /* 2. 左侧列表点开发板 */
+      await T("02 点开发板 -> 设为基座", async function (ck) {
+        var row = D.querySelector('#lib-mini-list .mini[data-id="esp32s3"]');
+        ck(!!row, "行不存在");
+        ck(row.getAttribute("data-act") === "setboard", "data-act=" + row.getAttribute("data-act"));
+        row.click(); await sleep(200);
+        ck(M.state.board === "esp32s3", "board=" + M.state.board);
+      });
+      await T("03 开发板不被计入 items / BOM", async function (ck) {
+        ck(Object.keys(M.state.items).indexOf("esp32s3") === -1, JSON.stringify(M.state.items));
+        ck(M.totalCount() === 1, "件数=" + M.totalCount());
+        ck(D.querySelector(".bom-total b").textContent === "¥48", "BOM=" + D.querySelector(".bom-total b").textContent);
+      });
+
+      /* 3. 加模块 */
+      await T("04 点模块 -> 加入 items 且 BOM 更新", async function (ck) {
+        D.querySelector('#lib-mini-list .mini[data-id="bmp280"]').click(); await sleep(160);
+        D.querySelector('#lib-mini-list .mini[data-id="sht30"]').click(); await sleep(160);
+        ck(M.state.items.bmp280 === 1 && M.state.items.sht30 === 1, JSON.stringify(M.state.items));
+        var b = D.querySelector(".bom-total b").textContent;
+        ck(b === "¥66.50", "显示 " + b + "，期望 ¥66.50（48+6.5+12）");
+      });
+
+      /* 4. 槽位 ± / 移除 */
+      await T("05 槽位 +1", async function (ck) {
+        D.querySelector('.slot .qty button[data-d="1"]').click(); await sleep(160);
+        ck(M.state.items.bmp280 === 2, "bmp280=" + M.state.items.bmp280);
+      });
+      await T("06 槽位移除", async function (ck) {
+        D.querySelector('.slot .slot-del').click(); await sleep(160);
+        ck(!M.state.items.bmp280, JSON.stringify(M.state.items));
+      });
+
+      /* 5. 电平校验联动 */
+      await T("07 5V 模块触发警告 -> 加转换器后消失", async function (ck) {
+        D.querySelector('#lib-mini-list .mini[data-id="hcsr04"]').click(); await sleep(180);
+        ck(D.querySelectorAll(".check-warn").length > 0, "无警告");
+        D.querySelector('#lib-mini-list .mini[data-id="levelshifter"]').click(); await sleep(180);
+        ck(D.querySelectorAll(".check-warn").length === 0, "仍有 " + D.querySelectorAll(".check-warn").length + " 条警告");
+      });
+
+      /* 5b. 严重度着色（回归：sev 缺失导致 check-undefined） */
+      await T("07b 错误档红色边框真实生效", async function (ck) {
+        M.clearAll(); W.location.hash = "#/build"; await sleep(260);
+        D.querySelector('#lib-mini-list .mini[data-id="bmp280"]').click(); await sleep(220);
+        var err = D.querySelector(".check-error");
+        ck(!!err, "无 check-error 项");
+        var c = W.getComputedStyle(err).borderLeftColor;
+        ck(c.replace(/\s/g, "").indexOf("255,98,89") > -1, "左边框色=" + c + "（期望危险色）");
+        ck(D.querySelectorAll(".check-undefined").length === 0, "存在 check-undefined 类名");
+      });
+
+      /* 6. 换基座 */
+      await T("08 下拉切换基座并重新分配引脚", async function (ck) {
+        var sel = D.getElementById("board-select");
+        sel.value = "uno"; sel.dispatchEvent(new W.Event("change", { bubbles: true })); await sleep(220);
+        ck(M.state.board === "uno", "board=" + M.state.board);
+        var pins = Array.prototype.map.call(D.querySelectorAll(".slot-pins"), function (e) { return e.textContent; }).join(" | ");
+        ck(pins.indexOf("A4") > -1, "各槽引脚=" + pins);
+      });
+
+      /* 7. 清空 */
+      await T("09 清空配置", async function (ck) {
+        D.querySelector('[data-act="clear"]').click(); await sleep(200);
+        ck(M.totalCount() === 0 && M.state.board === null);
+      });
+
+      /* 8. 预设 */
+      await T("10 首页预设载入", async function (ck) {
+        W.location.hash = "#/"; await sleep(280);
+        var btn = D.querySelector('[data-act="preset"][data-id="wx"]');
+        ck(!!btn, "预设按钮缺失");
+        btn.click(); await sleep(320);
+        ck(W.location.hash === "#/build", "hash=" + W.location.hash);
+        ck(M.state.board === "esp32s3" && M.state.items.sht30 === 1, JSON.stringify(M.state.items));
+      });
+
+      /* 9. 生成方案 */
+      await T("11 生成方案 -> 方案页", async function (ck) {
+        D.querySelector('[data-act="toplan"]').click(); await sleep(420);
+        ck(W.location.hash.indexOf("#/plan?p=") === 0, W.location.hash.slice(0, 26) + "…");
+        ck(!!D.querySelector(".wiring svg path"), "接线图未渲染");
+        var nPath = D.querySelectorAll(".wiring svg path").length;
+        var i2cRows = (M.check().alloc ? M.check().alloc.rows : []).filter(function (r) { return r.mod.bus === "i2c"; }).length;
+        ck(nPath >= i2cRows * 2, "路径数 " + nPath + " < I2C 设备 " + i2cRows + " × 2 根线（I2C 应画 SDA+SCL 两根）");
+        var svgTxt = D.querySelector(".wiring svg").textContent;
+        ck(svgTxt.indexOf("→") > -1, "框内缺少「信号→引脚」映射（防回退）");
+        ck(svgTxt.indexOf("GND") > -1 && svgTxt.indexOf("VCC") > -1, "缺少 VCC/GND 电源地线（真实接线必备）");
+        var vccN = 0, gndN = 0, dashN = 0;
+        D.querySelectorAll(".wiring svg path").forEach(function (p) {
+          var s = p.getAttribute("stroke") || "";
+          if (s.indexOf("vcc") > -1) vccN++;
+          if (s.indexOf("gnd") > -1) gndN++;
+        });
+        D.querySelectorAll(".wiring svg path").forEach(function (p) { if (p.getAttribute("stroke-dasharray")) dashN++; });
+        ck(vccN > 0, "VCC 供电线数量=0");
+        ck(gndN > 0, "GND 共地线数量=0");
+        ck(D.querySelectorAll(".wiring svg path").length >= 8, "连线总数偏少=" + D.querySelectorAll(".wiring svg path").length);
+        var cols = [];
+        D.querySelectorAll(".wiring svg text").forEach(function (t) { if (/^(GPIO|PA|PB|D\d|A\d|IO|GP|P0\.)/.test(t.textContent)) cols.push(t.textContent); });
+        var nums = cols.map(function (s) { var m = /(\d+)/.exec(s); return m ? parseInt(m[1], 10) : 0; });
+        var asc = true;
+        for (var ai = 1; ai < nums.length; ai++) if (nums[ai] < nums[ai - 1]) asc = false;
+        if (nums.length > 3) ck(asc, "引脚列未按编号升序: " + cols.join(","));
+        ck(D.querySelectorAll(".tbl tbody tr").length >= 3, D.querySelectorAll(".tbl tbody tr").length + " 行表格");
+        ck(!!D.querySelector(".kv-cell b"), "无汇总卡");
+      });
+
+      /* 10. 模块库筛选/搜索/排序 */
+      await T("12 分类筛选", async function (ck) {
+        W.location.hash = "#/explore"; await sleep(320);
+        var all = D.querySelectorAll(".cards .mcard").length;
+        D.querySelector('.fchip[data-id="sensor"]').click(); await sleep(260);
+        var n = D.querySelectorAll(".cards .mcard").length;
+        ck(n > 0 && n < all, n + "/" + all);
+        var act = D.querySelectorAll(".fchip.active");
+        ck(act.length === 1 && act[0].getAttribute("data-id") === "sensor", "active=" + act.length);
+      });
+      await T("13 搜索 + 焦点保持", async function (ck) {
+        D.querySelector('.fchip[data-id="all"]').click(); await sleep(240);
+        var si = D.getElementById("lib-search");
+        si.focus();
+        si.value = "lora"; si.dispatchEvent(new W.Event("input", { bubbles: true })); await sleep(260);
+        var n = D.querySelectorAll(".cards .mcard").length;
+        ck(n === 1, n + " 张卡");
+        ck(D.activeElement && D.activeElement.id === "lib-search", "焦点=" + (D.activeElement && D.activeElement.id || D.activeElement && D.activeElement.tagName));
+        si = D.getElementById("lib-search");
+        si.value = ""; si.dispatchEvent(new W.Event("input", { bubbles: true })); await sleep(220);
+      });
+      await T("13b 分类+搜索无结果时给出清除入口", async function (ck) {
+        D.querySelector('.fchip[data-id="sensor"]').click(); await sleep(220);
+        var si = D.getElementById("lib-search");
+        si.focus();
+        si.value = "lora"; si.dispatchEvent(new W.Event("input", { bubbles: true })); await sleep(260);
+        ck(D.querySelectorAll(".cards .mcard").length === 0, "本应为 0 结果");
+        var btn = D.querySelector('.cards [data-act="clearsearch"]');
+        ck(!!btn, "无清空搜索按钮");
+        var btn2 = D.querySelector('.cards [data-act="cat"][data-id="all"]');
+        ck(!!btn2, "无清除分类按钮");
+        btn2.click(); await sleep(240);
+        ck(D.querySelectorAll(".cards .mcard").length === 1, "清除分类后应剩 1 条 lora");
+        var si2 = D.getElementById("lib-search");
+        si2.focus();
+        si2.value = ""; si2.dispatchEvent(new W.Event("input", { bubbles: true })); await sleep(260);
+        ck(D.querySelectorAll(".cards .mcard").length === M.BOARDS.length + M.MODULES.length, "清空搜索后应回到 " + (M.BOARDS.length + M.MODULES.length) + " 条，实际 " + D.querySelectorAll(".cards .mcard").length);
+      });
+      await T("14 价格升序排序", async function (ck) {
+        D.querySelector('.fchip[data-id="all"]').click(); await sleep(240);
+        var so = D.getElementById("lib-sort");
+        so.value = "price-asc"; so.dispatchEvent(new W.Event("change", { bubbles: true })); await sleep(280);
+        var p = (D.querySelector(".cards .mcard .price") || {}).textContent || "";
+        ck(p.indexOf("1.50") > -1, "首位 " + p.trim());
+        ck((D.getElementById("lib-sort") || {}).value === "price-asc", "选中值丢失");
+      });
+
+      /* 11. 页脚分类链接 */
+      await T("15 页脚分类链接原地切换", async function (ck) {
+        var a = D.querySelector('.foot a[data-act="catgoto"][data-id="power"]');
+        ck(!!a, "链接缺失");
+        a.click(); await sleep(280);
+        var act = D.querySelector(".fchip.active");
+        ck(act && act.getAttribute("data-id") === "power", "active=" + (act ? act.getAttribute("data-id") : "none"));
+      });
+
+      /* 12. 主题 */
+      await T("16 明暗主题切换", async function (ck) {
+        var before = D.documentElement.getAttribute("data-theme");
+        D.querySelector('[data-act="theme"]').click(); await sleep(140);
+        var after = D.documentElement.getAttribute("data-theme");
+        ck(before !== after, before + " -> " + after);
+        D.querySelector('[data-act="theme"]').click(); await sleep(140);
+      });
+
+      /* 13. 核心层防护 */
+      await T("17 addItem(开发板) 转成选基座", async function (ck) {
+        M.clearAll(); M.addItem("uno");
+        ck(M.state.board === "uno" && !M.state.items.uno, JSON.stringify(M.state));
+      });
+      await T("18 load 过滤 items 里的脏数据", async function (ck) {
+        M.state.items.uno = 3; M.save(); M.load();
+        ck(!M.state.items.uno, JSON.stringify(M.state.items));
+      });
+      await T("19 空方案拦截", async function (ck) {
+        M.clearAll(); W.location.hash = "#/build"; await sleep(260);
+        D.querySelector('[data-act="toplan"]').click(); await sleep(260);
+        ck(W.location.hash === "#/explore", "hash=" + W.location.hash);
+      });
+
+      /* 14. 分享链接还原 */
+      await T("20 分享链接可还原方案", async function (ck) {
+        M.clearAll(); M.setBoard("picow");
+        M.state.items = { dht22: 1, lora: 1 }; M.save();
+        var link = "#/plan?p=" + M.encodePlan();
+        M.clearAll();
+        W.location.hash = link; await sleep(380);
+        ck(M.state.board === "picow" && M.state.items.lora === 1, JSON.stringify(M.state));
+        ck(!!D.querySelector(".wiring svg"), "方案页未渲染");
+      });
+
+      /* 15. 电源模块入接线图 */
+      await T("21 电源模块入接线图（幽灵节点 + 供电节点）", async function (ck) {
+        M.clearAll(); M.setBoard("esp32s3"); M.state.items = { tt: 1 };
+        W.location.hash = "#/plan?p=" + M.encodePlan(); await sleep(420);
+        var svg = D.querySelector(".wiring svg");
+        ck(!!svg, "接线图未渲染");
+        ck(svg.textContent.indexOf("缺外部电源") > -1, "无红色幽灵节点");
+        ck(svg.textContent.indexOf("POWER") > -1, "无 POWER 分区");
+        M.state.items = { tt: 1, boost12v: 1 };
+        W.location.hash = "#/plan?p=" + M.encodePlan(); await sleep(420);
+        svg = D.querySelector(".wiring svg");
+        ck(svg.textContent.indexOf("12V / 2.5A") > -1, "无供电标签");
+        ck(svg.textContent.indexOf("缺外部电源") === -1, "加电源后幽灵节点未消失");
+      });
+
+      /* 16. 下单 → 支付 → 后台推进 */
+      await T("22 下单并创建订单", async function (ck) {
+        M.clearAll(); M.setBoard("esp32s3"); M.state.items = { bmp280: 1, oled096: 1 };
+        W.location.hash = "#/checkout"; await sleep(340);
+        ck(!!D.getElementById("co-name"), "下单页未渲染");
+        D.getElementById("co-name").value = "雾削木";
+        D.getElementById("co-phone").value = "13800001234";
+        D.getElementById("co-addr").value = "广东省深圳市南山区科技园 1 号";
+        D.querySelector('[data-act="submit-order"]').click(); await sleep(380);
+        var list = JSON.parse(W.localStorage.getItem("modbay.orders.v1") || "[]");
+        ck(list.length === 1 && list[0].status === "pending", JSON.stringify(list.map(function (o) { return o.status; })));
+        ck(W.location.hash.indexOf("#/orders?hl=") === 0, W.location.hash.slice(0, 20));
+      });
+      await T("23 模拟支付（弹窗）", async function (ck) {
+        D.querySelector('[data-act="pay-order"]').click(); await sleep(500);
+        var modal = D.getElementById("pay-modal");
+        ck(!!modal, "支付弹窗未出现");
+        ck(!!D.getElementById("pay-qr"), "无二维码容器");
+        var mockBtn = modal && modal.querySelector('[data-act="pay-mock-confirm"]');
+        ck(!!mockBtn, "无模拟支付按钮（网关不可达时应降级 mock）");
+        mockBtn.click(); await sleep(320);
+        ck(!D.getElementById("pay-modal"), "支付后弹窗未关闭");
+        var list = JSON.parse(W.localStorage.getItem("modbay.orders.v1"));
+        ck(list[0].status === "paid", "状态=" + list[0].status);
+      });
+      await T("24 演示后台推进订单", async function (ck) {
+        W.location.hash = "#/admin"; await sleep(340);
+        ck(!!D.getElementById("admin-filter"), "后台未渲染");
+        D.querySelector('[data-act="admin-auto"]').click(); await sleep(320);
+        var list = JSON.parse(W.localStorage.getItem("modbay.orders.v1"));
+        ck(list[0].status === "stocking", "状态=" + list[0].status);
+        D.querySelector('[data-act="admin-act"][data-st="shipped"]').click(); await sleep(300);
+        list = JSON.parse(W.localStorage.getItem("modbay.orders.v1"));
+        ck(list[0].status === "shipped", "状态=" + list[0].status);
+        ck(D.querySelector(".kv-grid") !== null, "无统计卡");
+      });
+
+      /* 17. 方案广场：浏览 / 打开 / 点赞 / Remix / 发布 */
+      await T("25 广场列表渲染", async function (ck) {
+        W.location.hash = "#/plaza"; await sleep(700);
+        ck(D.querySelectorAll("#plaza-grid .mcard").length >= 4, "卡片数=" + D.querySelectorAll("#plaza-grid .mcard").length);
+        ck(D.body.textContent.indexOf("广场在搭什么") === -1, "广场页不该有首页模块");
+        var top = D.querySelector(".kv-grid b");
+        ck(top && top.textContent.indexOf("机械臂") > -1, "TOP3 栏缺失: " + (top ? top.textContent : "null"));
+      });
+      await T("26 打开广场方案 -> 可直接下单", async function (ck) {
+        D.querySelector('#plaza-grid .mcard [data-act="goto"]').click(); await sleep(800);
+        ck(W.location.hash.indexOf("#/plan/") === 0, W.location.hash);
+        ck(D.body.textContent.indexOf("作者 MODBAY 官方") > -1, "无作者归属横幅");
+        ck(M.remixFrom && M.remixFrom.author === "MODBAY 官方", "remixFrom 未设置");
+        ck(!!D.querySelector(".wiring svg path"), "方案内容未渲染");
+        ck(!!D.querySelector('[data-act="goto"][data-hash="#/checkout"]'), "无下单按钮");
+      });
+      await T("27 点赞广场方案", async function (ck) {
+        var before = (D.querySelector('[data-act="plaza-like"]') || {}).textContent || "";
+        D.querySelector('[data-act="plaza-like"]').click(); await sleep(500);
+        var after = (D.querySelector('[data-act="plaza-like"]') || {}).textContent || "";
+        ck(before.indexOf("♥ 点赞") > -1 && after.indexOf("♥ 已赞") > -1, before + " -> " + after);
+      });
+      await T("28 发布方案到广场", async function (ck) {
+        W.location.hash = "#/plaza"; await sleep(600);
+        D.querySelector('[data-act="goto"][data-hash="#/build"]').click(); await sleep(300);
+        ck(W.location.hash === "#/build", "未回配置台");
+        M.setBoard("esp32s3"); M.state.items = { bmp280: 1 }; M.save();
+        W.location.hash = "#/plan"; await sleep(400);
+        var D2 = fr.contentDocument;
+        ck(D2 === D, "iframe 发生重载（document 引用过期）");
+        D = D2;
+        D.querySelector('[data-act="plaza-publish"]').click(); await sleep(300);
+        ck(!!D.getElementById("plaza-publish"), "发布弹窗未出现");
+        D.getElementById("pp-name").value = "回归测试方案";
+        D.getElementById("pp-author").value = "自动化测试";
+        D.getElementById("pp-tags").value = "回归,测试";
+        D.getElementById("pp-note").value = "由 DOM 回归自动发布";
+        D.querySelector('[data-act="plaza-publish-submit"]').click(); await sleep(800);
+        var r = D.getElementById("pp-result");
+        ck(r && r.textContent.indexOf("已发布") > -1, "发布结果: " + (r ? r.textContent.slice(0, 60) : "null(reloaded=" + (fr.contentDocument !== D2) + ")"));
+        var toast2 = D.querySelector(".toast");
+        ck(toast2 && toast2.textContent.indexOf("已发布") > -1, "toast=" + (toast2 ? toast2.textContent.slice(0, 40) : "none"));
+        var list = await fetch(W.location.origin + "/api/plans").then(function (x) { return x.json(); });
+        ck(list.plans.some(function (p) { return p.name === "回归测试方案"; }), "广场列表未包含新发布方案");
+      });
+      await T("29 Remix 广场方案", async function (ck) {
+        W.location.hash = "#/plaza"; await sleep(700);
+        var remixBtn = D.querySelector('#plaza-grid .mcard [data-act="goto"]');
+        var pid = remixBtn.getAttribute("data-hash").replace("#/plan/", "");
+        W.location.hash = "#/plan/" + pid; await sleep(800);
+        D.querySelector('[data-act="plaza-remix"]').click(); await sleep(400);
+        ck(W.location.hash === "#/build", "未跳配置台: " + W.location.hash);
+        ck(M.remixFrom && M.remixFrom.id === pid, "remixFrom 错误");
+        ck(M.totalCount() > 0, "配置台为空");
+      });
+
+      await T("30 损坏的分享链接给出明确提示", async function (ck) {
+        M.clearAll();
+        W.location.hash = "#/plan?p=eyJiIjoiZXNwMzJzMyIsImkiOnsidHQiOjEsImwyOjEsImVuY29kZXIiOjF9fQ"; await sleep(400);
+        var txt = D.getElementById("app").textContent;
+        ck(txt.indexOf("方案链接已损坏") > -1, "未提示链接损坏: " + txt.slice(0, 60));
+        ck(txt.indexOf("还没有可预览的方案") === -1, "仍显示误导性空态");
+        /* 正常链接仍要能还原 */
+        M.clearAll(); M.setBoard("esp32s3"); M.state.items = { bmp280: 1 }; M.save();
+        var good = "#/plan?p=" + M.encodePlan();
+        M.clearAll(); W.location.hash = good; await sleep(500);
+        ck(D.body.textContent.indexOf("你的方案，长这样") > -1, "正常链接未能还原方案");
+        ck(M.totalCount() === 2, "还原件数=" + M.totalCount());
+      });
+
+      await T("31 未知路由给出 404 视图", async function (ck) {
+        W.location.hash = "#/foo/bar"; await sleep(350);
+        var t = D.getElementById("app").textContent;
+        ck(t.indexOf("这个页面不存在") > -1, "无 404 视图: " + t.slice(0, 40));
+        ck(t.indexOf("#/foo/bar") > -1, "未回显原始路由");
+        D.querySelector('[data-act="goto"][data-hash="#/"]').click(); await sleep(350);
+        ck(W.location.hash === "#/", "回首页失败: " + W.location.hash);
+      });
+      await T("32 Esc 关闭发布弹窗", async function (ck) {
+        M.clearAll(); M.setBoard("esp32s3"); M.state.items = { bmp280: 1 }; M.save();
+        W.location.hash = "#/plan"; await sleep(420);
+        D.querySelector('[data-act="plaza-publish"]').click(); await sleep(250);
+        ck(!!D.getElementById("plaza-publish"), "弹窗未打开");
+        D.dispatchEvent(new W.KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+        await sleep(220);
+        ck(!D.getElementById("plaza-publish"), "Esc 未关闭弹窗");
+      });
+      await T("33 扩容模块 + 引脚表电源地行 + 装配估算", async function (ck) {
+        ck(M.MODULES.length >= 50, "模块数=" + M.MODULES.length);
+        ck(!!M.ALL.mg996r && M.ALL.mg996r.peak === 2500, "高电流舵机缺失");
+        ck(!!M.ALL.ws2812_strip && M.ALL.ws2812_strip.provides === undefined, "灯带数据异常");
+        ck(!!M.ALL.buck5v && M.ALL.buck5v.provides["5v"] === 3000, "降压模块 provides 异常");
+        M.setBoard("esp32s3"); M.state.items = { bmp280: 1, mg996r: 1, buck5v: 1 }; M.save();
+        W.location.hash = "#/plan"; await sleep(300);
+        W.MODBAY_RERENDER();   /* hash 未变时手动触发重渲染，避免读到旧画面 */
+        await sleep(400);
+        var t = D.body.textContent;
+        ck(t.indexOf("VCC→") > -1 && t.indexOf("GND→GND") > -1, "引脚表缺电源/地行");
+        ck(t.indexOf("装配估算") > -1 && t.indexOf("杜邦线") > -1, "缺装配估算");
+        ck(D.querySelectorAll(".check-warn").length > 0 || t.indexOf("峰值电流") > -1, "MG996R 未触发高电流预警（warn=" + D.querySelectorAll(".check-warn").length + "）");
+      });
+
+      await T("34 3D 装配预览渲染与交互", async function (ck) {
+        M.clearAll(); M.setBoard("esp32s3");
+        M.state.items = { tt: 1, l298n: 1, encoder: 1, tft18: 1, oled096: 1, lipo: 1 }; M.save();
+        W.location.hash = "#/build"; await sleep(250);
+        W.location.hash = "#/plan"; await sleep(500);
+        var v3 = D.getElementById("view3d");
+        ck(!!v3, "3D 视口未挂载");
+        var polys = D.querySelectorAll("#view3d polygon").length;
+        ck(polys > 80, "多边形过少=" + polys);
+        ck(D.querySelectorAll("#view3d polygon[data-mod]").length > 0, "模块面未带 data-mod");
+        ck(D.querySelectorAll("#view3d polygon").length < 900, "多边形过多（未剔除背面）=" + polys);
+        /* 精细度：零件量 + 接触阴影 + 板上丝印 */
+        ck(polys > 300, "零件面数过少，模型不够精细=" + polys);
+        ck(D.querySelectorAll("#view3d polygon[fill-opacity]").length > 0, "缺少模块接触阴影");
+        var lg = D.querySelector(".v3-legend");
+        ck(lg && lg.textContent.indexOf("L298N") > -1, "图例缺少模块名");
+        /* 模型不得溢出视口（取景失效时会露馅） */
+        var ys = [];
+        Array.from(D.querySelectorAll("#view3d polygon")).forEach(function (p) {
+          p.getAttribute("points").split(" ").forEach(function (pair) { ys.push(+pair.split(",")[1]); });
+        });
+        ck(Math.min.apply(null, ys) > -2 && Math.max.apply(null, ys) < 562, "3D 模型溢出视口 y=[" + Math.round(Math.min.apply(null, ys)) + "," + Math.round(Math.max.apply(null, ys)) + "]");
+        /* 拖拽旋转：点位应发生变化 */
+        var before = D.querySelector("#view3d polygon").getAttribute("points");
+        var svg = D.querySelector("#view3d svg");
+        var r = svg.getBoundingClientRect();
+        svg.dispatchEvent(new W.PointerEvent("pointerdown", { bubbles: true, clientX: r.left + 100, clientY: r.top + 100 }));
+        D.dispatchEvent(new W.PointerEvent("pointermove", { bubbles: true, clientX: r.left + 220, clientY: r.top + 140 }));
+        D.dispatchEvent(new W.PointerEvent("pointerup", { bubbles: true }));
+        await sleep(150);
+        var after = D.querySelector("#view3d polygon").getAttribute("points");
+        ck(before !== after, "拖拽未改变视角");
+        /* 拖拽会自动暂停旋转（避免和用户抢镜头） */
+        ck(D.querySelector('[data-act="v3-auto"]').textContent.indexOf("自动旋转") > -1, "拖拽后未自动暂停");
+        /* 点击模块高亮 + 信息栏 */
+        var face = D.querySelector('#view3d polygon[data-mod="l298n"]');
+        ck(!!face, "找不到 L298N 的面");
+        face.dispatchEvent(new W.MouseEvent("click", { bubbles: true }));
+        await sleep(150);
+        ck(D.querySelectorAll('#view3d polygon[stroke="var(--accent)"]').length > 0, "点击未高亮");
+        ck((D.querySelector(".v3-info") || {}).textContent.indexOf("L298N") > -1, "信息栏未显示: " + (D.querySelector(".v3-info") || {}).textContent);
+        /* 恢复自动旋转 → 画面应持续变化 */
+        var p0 = D.querySelector("#view3d polygon").getAttribute("points");
+        D.querySelector('[data-act="v3-auto"]').click(); await sleep(400);
+        ck(D.querySelector("#view3d polygon").getAttribute("points") !== p0, "恢复自动旋转后画面未变化");
+        ck(D.querySelector('[data-act="v3-auto"]').textContent.indexOf("暂停") > -1, "按钮文案未切回暂停");
+        /* 再暂停 → 画面应静止 */
+        D.querySelector('[data-act="v3-auto"]').click(); await sleep(120);
+        var p1 = D.querySelector("#view3d polygon").getAttribute("points");
+        await sleep(400);
+        ck(D.querySelector("#view3d polygon").getAttribute("points") === p1, "暂停后仍在旋转");
+        /* 重置视角 */
+        D.querySelector('[data-act="v3-reset"]').click(); await sleep(150);
+        ck(D.querySelector("#view3d polygon").getAttribute("points") !== p1, "重置未生效");
+        ck((D.querySelector(".v3-info") || {}).textContent.indexOf("拖拽") > -1, "重置未清除高亮");
+      });
+
+
+      /* 35. 软件方案：BSP / 驱动 / 联动 / 协议 */
+      await T("35 软件方案：BSP 引脚真实、联动与协议、档位切换", async function (ck) {
+        M.clearAll(); M.setBoard("esp32s3");
+        M.state.items = { hcsr04: 1, sg90: 1, bmp280: 1, oled096: 1 };
+        W.location.hash = "#/plan?p=" + M.encodePlan(); await sleep(450);
+
+        var C = W.MODBAY_CODE;
+        ck(!!C, "MODBAY_CODE 未挂载");
+        var plan = M.check();
+        var fl = C.files(plan);
+        ck(fl.length >= 12, "生成文件数 " + fl.length);
+
+        var bsp = fl.filter(function (f) { return f.path === "firmware/bsp_board.py"; })[0];
+        ck(!!bsp, "缺 BSP 文件");
+        var row = plan.alloc.rows.filter(function (r) { return r.mod.id === "hcsr04"; })[0];
+        ck(bsp.body.indexOf("M_HCSR04_IO1") > -1, "BSP 缺模块引脚常量");
+        ck(bsp.body.indexOf("Pin(" + row.signals[0].pin.replace(/[^0-9]/g, "") + ")") > -1,
+          "BSP 引脚值未取真实分配 " + row.signals[0].pin);
+
+        var drv = fl.filter(function (f) { return f.path === "firmware/drivers/hcsr04.py"; })[0];
+        ck(drv && drv.body.indexOf("ticks_us") > -1, "超声驱动缺时序实现");
+
+        var links = C.linkages(plan);
+        ck(links.length >= 1, "联动规则为空");
+        ck(links[0].sensor === "hcsr04" && links[0].actor === "sg90", "联动配对错误：" + JSON.stringify(links[0]));
+
+        var prots = C.protocols(plan);
+        ck(prots.length >= 4, "协议表过少 " + prots.length);
+        ck(prots.some(function (x) { return x.kind === "I2C" && x.detail.indexOf("0x76") > -1; }), "I2C 地址未进协议表");
+
+        ck(D.querySelectorAll(".code-file").length === fl.length, "文件树数量不符");
+        var target = D.querySelector('.code-file[data-path="firmware/main.py"]');
+        ck(!!target, "文件树缺 main.py");
+        target.click(); await sleep(180);
+        ck((D.querySelector("#code-pane .code-body") || {}).textContent.indexOf("def main") > -1, "切换文件未生效");
+
+        D.querySelector('.sw-card[data-id="cloud"]').click(); await sleep(300);
+        ck(M.ui.sw === "cloud", "档位未切换");
+        ck((D.querySelector(".sw-total") || {}).textContent.indexOf("168") > -1,
+          "价格未更新：" + (D.querySelector(".sw-total") || {}).textContent);
+      });
+
+      /* 36. 底板设计图 */
+      await T("36 底板设计图：板框 / 安装孔 / 占位 / 板外件 / 工艺", async function (ck) {
+        var B = W.MODBAY_BOARD;
+        ck(!!B, "MODBAY_BOARD 未挂载");
+        var plan = M.check();
+        var L = B.layout(plan);
+        ck(L.W > 40 && L.H > 30, "板框过小 " + L.W + "x" + L.H);
+        ck(L.modules.length === 3, "板内模块数 " + L.modules.length + "（应剔除舵机）");
+        ck(L.offboard.length === 1, "板外件数 " + L.offboard.length);
+
+        var svg = D.querySelector(".board-stage svg");
+        ck(!!svg, "底板 SVG 缺失");
+        ck(svg.querySelectorAll("circle").length >= 4, "安装孔不足");
+        ck(svg.querySelectorAll("rect").length >= 4, "占位矩形不足");
+        var txt = svg.textContent;
+        ck(txt.indexOf("0x") === -1, "SVG 内混入调试文本");
+
+        var fab = B.fab(plan);
+        ck(fab.price > 0 && fab.joints > 0, "工艺参数异常 " + JSON.stringify(fab));
+        ck(fab.layers === 2 && fab.pitch === 2.54, "工艺默认值错误");
+        ck(D.querySelectorAll(".fab-cell").length >= 8, "工艺卡不足");
+      });
+
+      /* 37. 自由画板：节点 / 连线 / 拖拽 */
+      await T("37 自由画板：节点数、总线分支、拖拽重算、自动排布", async function (ck) {
+        var CV = W.MODBAY_CANVAS;
+        ck(!!CV, "MODBAY_CANVAS 未挂载");
+        var stage = D.getElementById("cv-stage");
+        ck(!!stage, "画板容器缺失");
+        var nodes = stage.querySelectorAll(".cv-node");
+        ck(nodes.length === 5, "节点数 " + nodes.length + "（1 主控 + 4 模块）");
+        var paths0 = stage.querySelectorAll(".cv-edges path").length;
+        ck(paths0 >= 4, "连线数 " + paths0);
+
+        var n = stage.querySelector('.cv-node[data-node="bmp280"]');
+        ck(!!n, "找不到 bmp280 节点");
+        var left0 = n.style.left, top0 = n.style.top;
+        var rect = stage.getBoundingClientRect();
+        function pe(type, x, y) {
+          return new W.PointerEvent(type, { bubbles: true, clientX: x, clientY: y, pointerId: 1 });
+        }
+        n.dispatchEvent(pe("pointerdown", rect.left + 40, rect.top + 20));
+        stage.dispatchEvent(pe("pointermove", rect.left + 150, rect.top + 120));
+        stage.dispatchEvent(pe("pointerup", rect.left + 150, rect.top + 120));
+        await sleep(160);
+        ck(n.style.left !== left0 || n.style.top !== top0,
+          "拖拽未改变位置 " + left0 + "->" + n.style.left);
+        ck(stage.querySelectorAll(".cv-edges path").length >= 4, "拖拽后连线丢失");
+
+        D.querySelector('[data-act="cv-auto"]').click(); await sleep(220);
+        ck(n.style.left === left0 && n.style.top === top0,
+          "自动排布未恢复默认位 " + n.style.left + "/" + n.style.top + " 期望 " + left0 + "/" + top0);
+      });
+
+      dump();
+    }
+  </script>
+</body>
+</html>

@@ -1,0 +1,14 @@
+{
+  "name": "MODBAY · 模块湾 — 硬件方案智能定制平台",
+  "short_name": "模块湾",
+  "description": "在线组合开发板、传感器、电机等硬件模块，实时校验引脚 / 地址 / 电源预算，一键生成方案并下单。",
+  "start_url": "./index.html",
+  "display": "standalone",
+  "background_color": "#0d1117",
+  "theme_color": "#0d1117",
+  "icons": [
+    { "src": "assets/icons/icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "assets/icons/icon-512.png", "sizes": "512x512", "type": "image/png" },
+    { "src": "assets/icons/favicon.svg", "sizes": "any", "type": "image/svg+xml" }
+  ]
+}
