@@ -148,23 +148,61 @@ node server/server.js          # 默认 :8321，PORT=8400 node server/server.js 
 
 ## 部署
 
-纯静态、零构建、哈希路由（无 404 问题），三个平台都能直接托管：
+纯静态、零构建、哈希路由（无 404 回退问题）。两条主路径：
 
-**GitHub Pages**
+### GitHub Pages（push 自动发布）
+
+仓库内已带 `.github/workflows/pages.yml`，流程是 **跑引擎测试 → 组装产物 → 发布**：
+
+1. 仓库 **Settings → Pages → Build and deployment → Source** 选 **GitHub Actions**（只需设一次）
+2. 之后每次 `git push` 到 `main` 自动触发，也可在 Actions 页手动 `Run workflow`
+3. 站点地址：`https://<用户名>.github.io/<仓库名>/`
+
+workflow 只打包运行期文件（`index.html` / `assets/` / `site.webmanifest` / `.nojekyll`），
+`server/`、测试文件不进产物；发布前会校验 `app-core.js`、`style-core.css`、`mod/manifest.js` 是否存在，
+缺一个就失败，避免发出白屏站点。
+
+> **私有仓库发布 Pages 需要付费账号**（Pro / Team / Enterprise）。免费账号只有 public 仓库能用 Pages。
+> 想不花钱就用 public 仓库，或直接走下面的 Vercel —— Vercel 和 Cloudflare Pages 对私有仓库免费。
+
+### Vercel（推荐给需要 preview 的场景）
+
+**网页导入**：Vercel → Add New → Project → 选这个仓库 →
+Framework Preset 选 **Other**，Build Command 留空，Output Directory 填 `.`，Deploy。
+之后每次 push 自动生成 preview 与 production。
+
+**CLI**：
 ```bash
-# 仓库根目录即本目录（含 .nojekyll，已配置）
-git init && git add -A && git commit -m "MODBAY"
-git remote add origin https://github.com/<你的用户名>/<仓库名>.git
-git push -u origin main
-# 仓库 Settings → Pages → Source 选 main 分支 / root，约 1 分钟后生效
-# 访问 https://<用户名>.github.io/<仓库名>/
+npm i -g vercel
+vercel          # 预览环境
+vercel --prod   # 生产
 ```
 
-**Vercel**：导入 Git 仓库 → Framework Preset 选 **Other** → 无需构建命令，直接 Deploy（仓库内已带 `vercel.json`：cleanUrls + 安全响应头 + 静态资源缓存）。也可 CLI：`npm i -g vercel && vercel --prod`。
+仓库内的 `vercel.json` 做了三件事：
 
-**Cloudflare Pages**：创建项目 → 连接 Git 仓库 → 构建命令留空 → 输出目录填 `/` → 保存部署。
+| 配置 | 作用 |
+| --- | --- |
+| `framework: null` + 空 build/output | 明确"这是纯静态站，别猜框架" |
+| 缓存分级 | `assets/mod/*`（58 张产品图）与 `assets/icons/*` 缓存 30 天 immutable；`index.html` 与 js/css 走 `max-age=0, must-revalidate`，改完立刻生效 |
+| 安全头 | `nosniff` / `SAMEORIGIN` / `strict-origin-when-cross-origin` / 关闭地理与摄像头权限 |
 
-> 纯静态部署时：选型 / 下单 / 后台 / 分享链接全部可用；**方案广场与真实支付**依赖 `server/` 网关，可另部署到 Railway / Render / VPS，并把 `assets/pay-config.js` 的 `apiBase` 指向该域名（广场 API 同源直连）。
+`.vercelignore` 把 `server/`、`_domtest.html`、`test-engine.js`、启动脚本排除在上传之外。
+
+### Cloudflare Pages
+
+连接 Git 仓库 → 构建命令留空 → 输出目录填 `/` → 保存部署。
+
+### 静态托管的功能边界
+
+选型 / 3D / 接线图 / 底板图 / 软件方案 / 画板 / 下单 / 后台全部可用。
+**方案广场与真实支付**依赖 `server/` 网关（Node），静态托管下：
+
+- 广场退化为本地方案列表
+- 支付 `fetch` 失败后自动降级为**模拟支付**，页面会明确标注（`assets/pay.js` 的 catch 分支）
+
+要开真实支付，把 `server/` 部署到 Railway / Render / VPS，然后把 `assets/pay-config.js` 的
+`apiBase` 指向该域名即可，前端不用改。
+
 
 ## 说明
 

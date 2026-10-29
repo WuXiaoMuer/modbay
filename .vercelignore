@@ -1,0 +1,11 @@
+# Vercel 只发布静态前端，服务端代码与测试文件不上传
+server/
+_domtest.html
+test-engine.js
+start.bat
+start.sh
+stop.bat
+stop.sh
+.github/
+.git/
+README.md
