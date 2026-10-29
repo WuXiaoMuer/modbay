@@ -188,9 +188,39 @@ vercel --prod   # 生产
 
 `.vercelignore` 把 `server/`、`_domtest.html`、`test-engine.js`、启动脚本排除在上传之外。
 
-### Cloudflare Pages
+### Cloudflare Pages（私有仓库免费，国内访问最稳）
 
-连接 Git 仓库 → 构建命令留空 → 输出目录填 `/` → 保存部署。
+**网页集成**：Cloudflare Dashboard → Workers & Pages → Create → Pages → Connect to Git → 选仓库，然后：
+
+| 配置项 | 填什么 |
+| --- | --- |
+| Framework preset | **None** |
+| Build command | `mkdir -p dist && cp index.html site.webmanifest _headers dist/ && cp -r assets dist/` |
+| Build output directory | `dist` |
+| 环境变量 | 不需要 |
+
+**构建命令不能留空。** 留空时 Cloudflare 会把仓库根目录整个发布出去，`server/server.js`、`test-engine.js`、`_domtest.html` 全部可被公开下载 —— 源码虽然不会执行，但没必要送。上面的命令只产出 1.5MB / 97 个文件的纯前端产物（`index.html` + `assets/` + `site.webmanifest` + `_headers`）。
+
+产物结构：
+
+```
+dist/
+├── _headers          响应头与缓存策略
+├── assets/           JS / CSS / 图标 / 58 张产品图
+├── index.html
+└── site.webmanifest
+```
+
+**缓存策略**写在 `_headers`（Cloudflare 专有格式）：`assets/mod/*` 与 `assets/icons/*` 缓存 30 天 immutable，`index.html` 与 js/css 走 `max-age=0, must-revalidate`（文件名没有 hash，长缓存会让你改完看不到新版）。同时补了 `nosniff` / `SAMEORIGIN` / `Permissions-Policy`。
+
+**CLI 方式**：
+```bash
+npx wrangler pages deploy dist --project-name modbay
+```
+
+**自定义域名**：项目 → Custom domains → 添加，Cloudflare 托管的域名会自动配好 CNAME；外部域名按提示加一条 CNAME 记录指向 `<项目>.pages.dev`。
+
+部署完成后地址是 `https://modbay.pages.dev`，之后每次 push 到 `main` 自动重建（PR 也会生成独立预览链接）。
 
 ### 静态托管的功能边界
 

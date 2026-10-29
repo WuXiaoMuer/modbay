@@ -1,0 +1,25 @@
+# Cloudflare Pages 响应头与缓存策略
+# 语法：路径模式 + 两空格缩进的头；同一请求匹配多条规则时，后面的覆盖前面的
+
+/*
+  X-Content-Type-Options: nosniff
+  X-Frame-Options: SAMEORIGIN
+  Referrer-Policy: strict-origin-when-cross-origin
+  Permissions-Policy: geolocation=(), microphone=(), camera=()
+
+# 入口与脚本：文件名不带 hash，必须每次回源校验，否则改完看不到新版
+/
+  Cache-Control: public, max-age=0, must-revalidate
+
+/index.html
+  Cache-Control: public, max-age=0, must-revalidate
+
+/assets/*
+  Cache-Control: public, max-age=0, must-revalidate
+
+# 产品图与站点图标几乎不变，长缓存省流量（放在后面覆盖上面的通用规则）
+/assets/mod/*
+  Cache-Control: public, max-age=2592000, immutable
+
+/assets/icons/*
+  Cache-Control: public, max-age=2592000, immutable

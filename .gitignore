@@ -2,3 +2,6 @@ node_modules/
 server/data/
 .DS_Store
 Thumbs.db
+
+# Cloudflare Pages 构建产物（本地预览 / 拖拽上传用，不入库）
+dist/
