@@ -1,11 +1,11 @@
 /* 校验引擎单测（node 运行） */
 global.window = {};
-require("X:/video/ai/modbay/assets/data-boards.js");
-require("X:/video/ai/modbay/assets/data-modules-1.js");
-require("X:/video/ai/modbay/assets/data-modules-2.js");
-require("X:/video/ai/modbay/assets/data-modules-3.js");
-require("X:/video/ai/modbay/assets/data-presets.js");
-require("X:/video/ai/modbay/assets/app-core.js");
+require("./assets/data-boards.js");
+require("./assets/data-modules-1.js");
+require("./assets/data-modules-2.js");
+require("./assets/data-modules-3.js");
+require("./assets/data-presets.js");
+require("./assets/app-core.js");
 
 var M = global.window.M;
 var pass = 0, fail = 0;
