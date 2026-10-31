@@ -97,7 +97,7 @@ window.MODBAY_MODULES_1 = [
     desc: "一通就响的有源蜂鸣器，交互反馈最便宜方案。",
     specs: [["类型", "有源 2kHz"], ["声压", "≥85dB"], ["接口", "1 × GPIO"], ["供电", "3.3~5V"]],
     tags: ["蜂鸣器", "提示音"] },
-  { id: "ws2812", cat: "actuator", name: "WS2812-8 全彩灯环", brand: "WORLDSEMI", price: 10,
+  { id: "ws2812", cat: "actuator", name: "WS2812-8 全彩灯条", brand: "WORLDSEMI", price: 10,
     bus: "pwm", pins: 1, rail: "5v", ma: 120, peak: 480, level: [5],
     desc: "8 珠 5050 RGB，单总线级联，配 5V 独立供电 + 330Ω 更稳。",
     specs: [["灯珠", "WS2812 × 8"], ["协议", "单总线 800kHz"], ["全开", "≈480mA"], ["级联", "DO→DI"]],

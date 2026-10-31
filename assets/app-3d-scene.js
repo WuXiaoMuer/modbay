@@ -110,7 +110,7 @@
     },
     relay: function (px, py, pz, m, d) { return relayBox(px, py, pz, m, 1); },
     relay4: function (px, py, pz, m, d) { return relayBox(px, py, pz, m, 4); },
-    ws2812: function (px, py, pz, m, d) { return ring(px, py, pz, m, 8); },
+    ws2812: function (px, py, pz, m, d) { return ring(px, py, pz, m, 8, true); },
     ws2812_strip: function (px, py, pz, m, d) { return ring(px, py, pz, m, 14, true); },
     /* --- 显示 --- */
     oled096: function (px, py, pz, m, d) { return P.screen(px, py, pz, 24, 14, m); },
